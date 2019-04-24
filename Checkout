@@ -1,0 +1,254 @@
+package com.pw.services;
+//本类为银联网关接口的java Demo类
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.StringWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.Signature;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.lang.StringUtils;
+
+import com.pw.security.Base64;
+import com.pw.security.ByteUtils;
+
+public class Checkout {
+		
+		private static final String signType = "RSA";								 //签名类型   固定值
+		public static final String  SIGN_ALGORITHMS = "SHA1WithRSA";                 //RSA加密方式
+		
+		
+		//根据时间自动生成新的订单号
+		public static String merchantTradeId() {
+			Date date = new Date();
+			SimpleDateFormat df = new SimpleDateFormat("yyyyMMddHHmmss");
+			String merchantTradeId = "TEST"+df.format(date);
+			return merchantTradeId;
+		}
+		
+		//设置并组装参数，用于对参数进行签名 ，在这个组装的map对象中不含 signType  和 sign 字段，
+		public static  Map<String , String> paramMap(){
+			String version = "1.0";                                  //版本号   固定值    
+			String inputCharset = "UTF-8";							 //字符集   固定值
+			String payIp = "127.0.0.1";                              //会员ip  可以为空
+			String returnUrl = "http://www.baidu.com";				 //同步通知地址    根据自己情况而定
+			String notifyUrl = "http://www.baidu.com";				 //异步通知地址    根据自己情况而定
+			String deviceType = "WEB";                               //设备类型  值可以为“WEB”和“H5” ,当payType的值为EC时，此参数值只能为WEB
+			String payType = "EC";									 //交易类型   EC=网上银行支付    NC=快捷支付  CARDBANK=卡对卡支付（即C2C）
+			String merchantId = "752";								 //商户号 根据商户自身情况而定，再更改的时候记得更改main方法对应的的私钥和公钥
+			String merchantTradeId = merchantTradeId();				 //商户订单号   根据时间随机生成
+			String currency = "CNY";								 //币种   根据商户自身支持币种情况而定，详细参数值可参考api接口文档
+			String amountFee = "10.00";								 //金额
+			String goodsTitle = "test";								 //商品名称
+			String issuingBank = "UNIONPAY";						 //银行ID  固定值
+			
+			//如果 payType = EC,则需要添加以下参数
+			String subIssuingBank = "BOC";    						 //银行名称，如果此字段为空，将重定向至易付收银台 请参考API文档附录subIssuingBank代码
+			
+			//如果payType = NC,则需要添加以下参数
+			String cardType = "D";                                   //卡类型   借记卡: D  信用卡: C（暂不支持）
+			
+			//如果payType = "CARDBANK",则需要添加以下参数
+			 	   cardType = "D";
+			String paymentCard = "1234567"; 						 //支付银行卡号  
+			String userName = "张三";								 //银行卡姓名		
+			
+			
+			Map<String , String> paramMap = new HashMap<String , String>();
+			paramMap.put("version", version); 
+			paramMap.put("inputCharset", inputCharset); 
+			paramMap.put("payIp", payIp);
+			paramMap.put("returnUrl", returnUrl);
+			paramMap.put("notifyUrl", notifyUrl);
+			paramMap.put("deviceType", deviceType);
+			paramMap.put("payType", payType);
+			paramMap.put("merchantId", merchantId);
+			paramMap.put("merchantTradeId", merchantTradeId);
+			paramMap.put("currency", currency);
+			paramMap.put("amountFee", amountFee);
+			paramMap.put("goodsTitle", goodsTitle);
+			paramMap.put("issuingBank", issuingBank);
+			if(payType == "EC") {
+				paramMap.put("subIssuingBank", subIssuingBank);
+			}
+			if(payType == "NC") {
+				paramMap.put("cardType", cardType);
+			}
+			if(payType == "CARDBANK") {
+				paramMap.put("cardType", cardType);
+				paramMap.put("paymentCard", paymentCard);
+				paramMap.put("userName", userName);
+			}
+			return paramMap;
+		}
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		/**
+		 * 把数组所有元素排序，并按照“参数=参数值”的模式用“&”字符拼接成字符串
+		 * 
+		 * @param params
+		 *            需要排序并参与字符拼接的参数组
+		 * @return 拼接后字符串
+		 */
+		public static String generateSignContent(Map<String, String> map){
+	        if (null == map || map.isEmpty()) {
+	            return null;
+	        }
+	        StringBuilder buf = new StringBuilder();
+	        Map<String, String> tmpMap = map;
+	        try {
+	            List<Map.Entry<String, String>> infoIds = new ArrayList<>(tmpMap.entrySet());
+	            // 对所有传入参数按照字段名的 ASCII 码从小到大排序（字典序）
+	            Collections.sort(infoIds, (Map.Entry<String, String> o1, Map.Entry<String, String> o2) ->
+	                    o1.getKey().compareTo(o2.getKey())
+	            );
+	            // 构造URL 键值对的格式
+	            for (Map.Entry<String, String> item : infoIds) {
+	                String key = item.getKey();
+	                String value = item.getValue();
+	                if (StringUtils.isEmpty(value)) {
+	                    continue;
+	                }
+	                buf.append(key + "=" + value+"&");
+	            }
+	            buf.deleteCharAt(buf.length()-1);
+	        } catch (Exception e) {
+	            return null;
+	        }
+	        return buf.toString();
+	    }
+		
+		
+		/**
+		 * 对参数拼接的字符串进行RSA加密，得到RSA原始加密签名值（即api文档中的十进制加密值）
+		 */
+		public static String sign(String content, String privateKey, String input_charset)
+		{
+	        try 
+	        {
+	        	PKCS8EncodedKeySpec priPKCS8 	= new PKCS8EncodedKeySpec( Base64.decode(privateKey) ); 
+	        	KeyFactory keyf 				= KeyFactory.getInstance("RSA");
+	        	PrivateKey priKey 				= keyf.generatePrivate(priPKCS8);
+	            java.security.Signature signature = java.security.Signature
+	                .getInstance(SIGN_ALGORITHMS);
+	            signature.initSign(priKey);
+	            signature.update( content.getBytes(input_charset) );
+
+	            byte[] signed = signature.sign();
+	            
+	            return Base64.encode(signed);
+	        }
+	        catch (Exception e) 
+	        {
+	        	e.printStackTrace();
+	        }
+	        return null;
+	    }
+	
+		/**
+		 * 10进制转16进制
+		 * 
+		 * @param str
+		 * @return
+		 */
+		public static String DecimalToHex(String str) {
+			return toHexAscii(str.getBytes());
+		}
+		
+		public static String toHexAscii(byte[] bytes) {
+			int len = bytes.length;
+			StringWriter sw = new StringWriter(len * 2);
+			for (int i = 0; i < len; ++i)
+				addHexAscii(bytes[i], sw);
+			return sw.toString();
+		}
+		
+		public static void addHexAscii(byte b, StringWriter sw) {
+			int ub = unsignedPromote(b);
+			int h1 = ub / 16;
+			int h2 = ub % 16;
+			sw.write(toHexDigit(h1));
+			sw.write(toHexDigit(h2));
+		}
+		
+		private static char toHexDigit(int h) {
+			char out;
+			if (h <= 9)
+				out = (char) (h + 0x30);
+			else
+				out = (char) (h + 0x37);
+			return out;
+		}
+
+		public static int unsignedPromote(byte b) {
+			return b & 0xff;
+		}
+
+		/**
+		 * 动态组装form表单  提交请求
+		 */
+		 public static String formSubmitHtml(String url, String type, Map<String, String> param){
+		        StringBuffer strBuf = new StringBuffer();
+		        strBuf.append("<html><head><title>Deposit Gateway</title><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"></head><form name=\"f1\" method=\""+type+"\" action=\"" + url + "\">");
+		        if (null != param && !param.isEmpty()) {
+		        	Set<String> keySet = param.keySet();
+		            for(String key : keySet) {
+		            	strBuf.append("<input type=\"hidden\" name=\"" + key + "\" value=\"" + param.get(key) + "\"></input>");
+		            }
+		        }
+		        strBuf.append("</form></html><script language=\"JavaScript\">document.f1.submit();</script>");
+		        return strBuf.toString();
+		    }
+		 
+		 
+		 /**
+		  * 合并上述方法，发送请求
+		  */
+		 public static void main(String[] args) {
+			 	String input_charset = "UTF-8";
+				String requestUrl = "http://test-nms.nova2pay.com/payment/v3/checkOut.html"; //银联网关请求地址
+				String PrivateKey = "MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBALVhKEW/vMjKTa00r3P4/6UWOwP3qECxKSf7WBKEuySdFsF/So5BysLbNwto3O99cxbuSDz/86E7/WoA+d5NsHwl6hi2ps5wH0E0rN4XogW4ZvzIKk/BFxLT2zByUqO6SGRkV0noXHUHRqtsSEzdf5l7frsSsdcYT76WjWiZO8ApAgMBAAECgYAsjXr49woGQDsoSoK2d/lDsdw5M0Iu8dVsLr8JfXUCn1uRmBTWMK7/gh1ZPh7W7PeyMEGqSiyr9DJhMXAu/OJWkorN2g+tWn7ZYVHqtwoWLbHtbTZCLHHPiGvWSYDRKRrHN46ibl3cT+yxHgODT0+b7yr3gQzJaoHQJqYNZEFsoQJBAN2G6kQSQHMxHMWdile08G5WyaOtUqdnW72mRflHIzt6fcIoBuyMkdUYP5SHBMPvKvkE12KDPJ9tRv80aTvczgUCQQDRmt22VTU/r6Wn1+PgKfBd8JlxFIS03TqQ02PR9GabbhEWj+r2dtJ4S7qlFE3PyxerTLcg/Y1pWBqmKmb7LN7VAkEAksqKw46gnHQnz58EA/hG9aaWuNnqEjnAJdxfM756zzfsy1JAvFCtddo6j04kzzzVaetWWdYCvtXnnMZ7EQrQjQJANmFSglqq/QHqHZiyY1ceKJEijib/oxj+d9KQREl/UXYF8u+VyynawyEKpIeXBIExe9zkaie+R4V3LIM1wpbKnQJBALsqiQX9MOemmo9iSAnLKT2G+S2P4H1uJY9eA/kdMaTW5s9bUKSvhxdc+DtTPi5WwgphrBzDaer66uAk+SnzfpE=";
+				String publicKey = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDmwwFxxkClvsBzZUtE0CN4S7P0QWZxnpxn2De0zlqbjY6Put/8738SXYkGsuBIb5QZU3tDb/0hmON3zQ84BLexksP2iNqY1q1VSeY2NkV/QxrCUefUedTFsDU+ZcIB5JJ02m4fqpYtzYowtf5JrgjYHcyrO1IaX3NVITm9EPOMHQIDAQAB";
+				
+			   //将 请求的参数中 除了sign和signType外的参数组装成map对象
+			   Map<String , String> paramMap = paramMap();   
+			   System.out.println("参与字符串拼接的map："+paramMap);
+			   //将组装成的map对象中的参数根据ascill码进行拼接，生成例如 a=1&b=2 的字符串
+			   String content = generateSignContent(paramMap);
+			   System.out.println("拼接生成的字符串："+content);
+			   //对拼接成的字符串进行RSA签名
+			   String strSign = sign(content, PrivateKey, input_charset);
+			   System.out.println("加密生成的十进制加密值："+strSign);
+			   //对生成的RSA原始签名进行十转十六
+			   String sign = DecimalToHex(strSign);
+			   System.out.println("转换生成的十六进制加密值："+sign);
+			   //将sign 和 signType值加入 map对象中
+			   paramMap.put("sign", sign);
+			   paramMap.put("signType", signType);
+			   System.out.println("最终发送出去的参数："+paramMap);
+			   //以form表单的格式post发送到请求接口
+			   String response = formSubmitHtml(requestUrl,"post",paramMap);
+			   //因为这里是需要跳转表单的，所以这里打印一个返回的html, 可以找一个html页面把这串数据粘贴进去，在网站上打开即可
+			   System.out.println("请求得到的数据："+response);
+		}
+}
